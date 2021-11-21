@@ -23,6 +23,8 @@
 #					"@
 #
 #
+#		- Here-string must utilize double quotes via @" "@, NOT single quotes
+#
 # 	PS Registry Access
 # 		'Get-ItemProperty' makes every registry value a PSCustomObject object with PsPath, PsParentPath, PsChildname, PSDrive and PSProvider properties and then a property for its actual value. 
 #		So even though you asked for the item by name, to get its value you have to use the name once more.
@@ -84,8 +86,9 @@ $BuildVersion = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVe
 # Ex: "19041.1.amd64fre.vb_release.191206-1406"
 $BuildInternalName = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion' -Name BuildLabEx).BuildLabEx 
 
+# Not used
 # Ex: 2009	Meaning [20]20 September (09)
-$ReleaseYYMM = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion' -Name ReleaseId).ReleaseId
+$InitialInstallRelease = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion' -Name ReleaseId).ReleaseId
 
 # Ex: 20H2
 # This is the Master-Truth.
@@ -103,10 +106,29 @@ $KernelVer = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersi
 
 
 
+
+# FileSystemTime properties - https://docs.microsoft.com/en-us/dotnet/api/system.io.filesysteminfo.creationtime?view=net-6.0
+$DateFirstInstalled = (Get-Item $env:SystemRoot).CreationTime
+
+# Subtract 2 dates
+$age = New-TimeSpan -Start $DateFirstInstalled -End (Get-Date)
+
+#Date math
+$years = [int]($age.Days / 365)
+$daysRemainder = [int]($age.Days % 365)
+$hours = $age.Hours
+$ageFormatted = @"
+	$years Years $daysRemainder Days $hours hours
+"@
+$ageFormatted
+# Note: Here-string must be @" "@
+
+
+
 # A Here-String is utilized here as an example vs VBScript - https://docs.microsoft.com/en-us/previous-versions/windows/it-pro/windows-powershell-1.0/ee692792(v=technet.10)?redirectedfrom=MSDN
 
 $oneLiner = @" 
-$EditionName ($KernelVer)  |  Release: $ReleaseFriendly ($ReleaseYYMM)  |   Build: $BuildVersion ($BuildInternalName)
+$EditionName ($KernelVer)  |  Release: $ReleaseFriendly  |   Build: $BuildVersion ($BuildInternalName)
 "@
 
 $concatOutput = 
@@ -117,12 +139,16 @@ $concatOutput =
           -----------------------------------
 	`n`n
 $oneLiner `n`n
-      Release Name `& YY-MM:  "$ReleaseFriendly"  == '$ReleaseYYMM' 
+      Release Version Name:   $ReleaseFriendly
+	  
       Build Version:          $BuildVersion    	
       Build Internal Name:    $BuildInternalName `n 
-      OS Ver String:       $OSVersionString 
-      Edition:             $Edition ($EditionName)
-      OS Kernel Revision:  $KernelVer `n`n
+      OS Ver String:          $OSVersionString 
+      Edition:                $Edition ($EditionName)
+      OS Kernel Revision:     $KernelVer `n
+      OS Age:         $ageFormatted`n`n
+	  `n`n`n
+https://en.wikipedia.org/wiki/Windows_10_version_history#Channels
 "@
 
 # Clear
@@ -132,10 +158,4 @@ Write-Host $concatOutput
 
 # Pause
 Read-Host
-
-
-
-
-
-
 
