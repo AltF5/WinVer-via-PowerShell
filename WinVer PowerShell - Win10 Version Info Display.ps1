@@ -1,4 +1,15 @@
 
+# -------------------------------------------------------------------------
+# 
+# Win10 Releases:
+# https://en.wikipedia.org/wiki/Windows_10_version_history#Channels
+# 
+# Win11 Releases:
+# https://en.wikipedia.org/wiki/Windows_11_version_history#Channels
+# 
+# -------------------------------------------------------------------------
+
+
 
 # ================================
 # Script Begin
@@ -39,14 +50,23 @@ $EditionName = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVer
 # Ex: 6.3
 $KernelVer = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion' -Name CurrentVersion).CurrentVersion
 
+# Constant. For use in 2a. and 2b. below
+$unixEpoch1970 = [DateTime]"1970-1-1 12:00:00 am"
+
+
 
 
 #
-# 2. Read the Created Date on C:\WINDOWS (%SystemRoot%) to gather the date installed
+# 2. Determine Age of last Update / In-Place Upgrade   &   Age of first install (Born) 
+#
+
+# NO - THIS IS INACCURATE!
+#	  Read the Created Date on C:\WINDOWS (%SystemRoot%) to gather the date installed
 #
 #	  FileSystemTime properties - https://docs.microsoft.com/en-us/dotnet/api/system.io.filesysteminfo.creationtime?view=net-6.0
 #
-$DateFirstInstalled = (Get-Item $env:SystemRoot).CreationTime
+#$DateFirstInstalled = (Get-Item $env:SystemRoot).CreationTime
+
 
 
 
@@ -56,18 +76,114 @@ $DateFirstInstalled = (Get-Item $env:SystemRoot).CreationTime
 #
 #     Both represent the same value in UTC timezone. It's easiest to convert from the REG_DWORD since that is simply adding [n] seconds read in decimal to 1-1-1970 12:00:00
 
-# Going for the InstallDate (REG_DWORD)
+
+# Going for the 'InstallDate' (REG_DWORD) since that's easist to convert rather than 'InstallTime' REG_QWORD FILETIME.
+# Despite the names, both have Date + Time
 $installedDateSecondsSinceEpoch = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion' -Name InstallDate).InstallDate
 
-$unixEpoch1970 = [DateTime]"1970-1-1 12:00:00 am"
 $DateLastUpgradedOrReinstalled = $unixEpoch1970.AddSeconds($installedDateSecondsSinceEpoch)
+
 # UTC --> Current timezone
 $DateLastUpgradedOrReinstalled = $DateLastUpgradedOrReinstalled.ToLocalTime()
 
 
 
 #
-# 2b. Age since last In-Place upgrade or Win10 / 11 Feature Update
+# 2b. First install date 
+#
+
+
+# Get the 1st alphabetically-sorted keyname here:  HKEY_LOCAL_MACHINE\SYSTEM\Setup
+#	  Matching Source OS (*		For exmaple:	Source OS (Updated on 11/20/2021 01:07:19)
+#	  And reading that key's RegVal 'InstallDate' (REG_DWORD)
+#
+# Note: The object Name here is going to be the full key path, not just the key name
+#       as such it is required to preface this also with a leading *
+#
+#Get-ChildItem HKLM:\SYSTEM\Setup | SELECT Name | WHERE {$_ -like '*Source OS*'}  | SORT
+
+
+# [Tip : ToArray()]
+# GCI to Array:	$Files = @(Get-ChildItem ___)
+$UpdateKeys_FullPath_Array = @(Get-ChildItem HKLM:\SYSTEM\Setup | SELECT Name | WHERE {$_ -like '*Source OS*'}  | SORT)
+
+# UPDATE: This isn't an accurate assumption, and as such is handled below since this would sort Alphabetically rather than Date-Lexicographically
+
+# [PowerShell Caveat 1]: 
+#    The SELECT here is required have -Expand[Property] <PropertyName> to take an object with just 1 property (in this case 'Name') 
+#    and make the variable be the raw text only, not some sort of metadata, which wont work as an input ot GCI below
+#
+
+#$EarliestKeyNameFull = $UpdateKeys_FullPath_Array | SELECT -First 1 -Expand Name
+
+# [PowerShell Caveat 2]: 
+# Make powershell GCI happy which will not accept 				HKEY_LOCAL_MACHINE\SYSTEM\Setup		<== Bad for PS' GCI
+# But will accept it in a drive-like abbreviated format:		HKLM:\SYSTEM\Setup					<== Good for PS' GCI
+
+#$EarliestKeyNameFull = $EarliestKeyNameFull.replace('HKEY_LOCAL_MACHINE', 'HKLM:')
+
+# Same as above, but for the key path here
+
+#$installedDate_Birth_SecondsSinceEpoch = (Get-ItemProperty $EarliestKeyNameFull -Name InstallDate).InstallDate
+#$DateFirstInstalled = $unixEpoch1970.AddSeconds($installedDate_Birth_SecondsSinceEpoch)
+#$DateFirstInstalled = $DateFirstInstalled.ToLocalTime()
+
+
+# This variable will represent specific dates, within a custom object
+# This is needed becuase cannot just sort on the key name (Alphabetically) via -First, which will not be correct since we need to sort by looking at the whole date (lexicographically), since the form is in MM/dd/yyyy and not yyyy/mm/dd which then COULD be sorted on
+$AllUpgrades_AllInfo   = New-Object System.Collections.ArrayList
+
+$AllUpgrades_KeysOnly = @($UpdateKeys_FullPath_Array | SELECT -Expand Name)
+foreach($item in $AllUpgrades_KeysOnly) 
+{
+	$item2 = $item
+	$item2 = $item2.replace("HKEY_LOCAL_MACHINE\SYSTEM\Setup\Source OS (Updated on","")
+    $item2 = $item2.replace(")","").Trim()
+	
+	$obj = New-Object -TypeName psobject -Prop @{
+        FullKey = $item
+        DateString = $item2
+		DateAsDate = [DateTime]$item2
+		Date = [DateTime]$item2
+    }
+	
+	$AllUpgrades_AllInfo.Add($obj) | Out-Null
+}
+
+#
+# DBG - Display
+#
+
+#$AllUpgrades_AllInfo | Sort-Object -Property DateString
+#
+#$AllUpgrades_AllInfo | Sort-Object -Property DateAsDate
+
+
+# Must sort by the date lexicographically (taking into account the entire date string, but just alphabaetically, where for exmaple Nov (11) would appear before July (7)
+$AllUpgrades_AllInfo = $AllUpgrades_AllInfo | Sort-Object -Property DateAsDate
+
+# Grab just the string of the FullKey (via -Expand[Property] <PropName>)
+$EarliestKeyNameFull = $AllUpgrades_AllInfo | SELECT -First 1 -Expand FullKey
+
+# Do what was done above:
+$EarliestKeyNameFull = $EarliestKeyNameFull.replace('HKEY_LOCAL_MACHINE', 'HKLM:')
+$installedDate_Birth_SecondsSinceEpoch = (Get-ItemProperty $EarliestKeyNameFull -Name InstallDate).InstallDate
+$DateFirstInstalled = $unixEpoch1970.AddSeconds($installedDate_Birth_SecondsSinceEpoch)
+$DateFirstInstalled = $DateFirstInstalled.ToLocalTime()
+
+$datesUpgraded = ''
+foreach($obj in $AllUpgrades_AllInfo) 
+{
+	$datesUpgraded += $($obj | Select -Expand DateAsDate).ToString("yyy/M/d")
+	# For whatever reason this `n is not working from within a variable and then that put into a Here-String
+	#$datesUpgraded += '`n'			
+	$datesUpgraded += '  |   '
+}
+
+
+
+#
+# 2c. Age since last In-Place upgrade or Win10 / 11 Feature Update
 #
 
 # Subtract 2 dates
@@ -84,11 +200,8 @@ $ageFormatted = @"
 
 
 
-
-
-
 #
-# 2c. Age since birth (1st install) according to the created date on the C:\Windows directory
+# 2d. Age since birth (1st install) according to 2b.
 #
 
 $ageBorn = New-TimeSpan -Start $DateFirstInstalled -End (Get-Date)
@@ -100,6 +213,15 @@ $daysRemainder = $ageBorn.Days % 365
 $ageBornFormatted = @"
 	$years Years and $daysRemainder Days
 "@
+
+
+
+
+
+
+
+
+
 
 
 
@@ -151,10 +273,13 @@ $EditionName ($KernelVer)  |  Release: $ReleaseFriendly  |   Build: $BuildVersio
 $foramatDate1 = $DateLastUpgradedOrReinstalled.ToString("M-d-yyyy (dddd)   @ h:mm tt")
 $formatDate2 = $DateFirstInstalled.ToString("M-d-yyyy (dddd)   @ h:mm tt")
 
+
+# Dont add too much to this, otherwise if the screenbuffer is small (such as executing a .ps1 file from the Run dialog via a .lnk placed in the c:\users\%UserName%)
+# Then everything wont be shown at ance, and it requires the user to scroll back up
 $concatOutput = 
 @"
 `n
-Uptime:  $uptimeFormatted`n`n
+Uptime:  $uptimeFormatted`n
 $oneLiner `n`n
       Release Version Name:   $ReleaseFriendly
 	  
@@ -167,20 +292,14 @@ $oneLiner `n`n
       OS Age Born:    $ageBornFormatted
       
       Last Reinstall or In-Place Upgrade Date:  $foramatDate1  ($([Math]::Round($age.TotalDays, 2)) days ago)
-      Initial Install Date (Born):              $formatDate2  ($([Math]::Round($ageBorn.TotalDays, 2)) days ago)`n`n
+      Initial Install Date (Born):              $formatDate2  ($([Math]::Round($ageBorn.TotalDays, 2)) days ago)
 	  
-	  `n`n`n
---------------------
-Win10 Releases:
-https://en.wikipedia.org/wiki/Windows_10_version_history#Channels
-
-Win11 Releases:
-https://en.wikipedia.org/wiki/Windows_11_version_history#Channels
---------------------
-`n`n`n
+      Past Upgrades: [$($AllUpgrades_AllInfo.Length)]
+      $datesUpgraded 
+`n
 "@
 
-# Clear
+# Clear (comment out when needing to debug script errors)
 CLS
 
 $host.ui.RawUI.WindowTitle = "WinVer2 - Windows Verbose Version Info"
@@ -255,14 +374,19 @@ Read-Host
 #
 # Per: https://www.reddit.com/r/PowerShell/comments/pb0ir9/convert_windows_10_build_number_to_feature_update/
 #
-# [Build Num] : [Release Name Translation]
-#	15063 = 1703
-#	16299 = 1709
-#	17134 = 1803
-#	17763 = 1809
-#	18362 = 1903
-#	18363 = 1909
-#	19041 = 2004
-#	19042 = 20H2
-#	19043 = 21H1
-#	19044 = 21H2
+# [Build Num] : [Release Name Translation for Win10]
+#		15063 = 1703
+#		16299 = 1709
+#		17134 = 1803
+#		17763 = 1809
+#		18362 = 1903
+#		18363 = 1909
+#		19041 = 2004
+#		19042 = 20H2
+#		19043 = 21H1
+#		19044 = 21H2
+#		19045 = 22H2
+#
+# [Build Num] : [Release Name Translation for Win11]
+#		22000 = 21H2
+#		22621 = 22H2
